@@ -1,6 +1,7 @@
 <script type="application/javascript" src="{{ "js/github-style.js" | absURL }}"></script>
 
 <script src="{{ "js/mark.es6.min.js" | absURL }}"></script>
+<script src="https://cdn.jsdelivr.net/npm/fuse.js@7.1.0"></script>
 
 {{ if and .Site.Params.EnableLocalSearch .Site.Params.Rss }}
 <script type="text/javascript">
@@ -26,6 +27,28 @@
   let svgOriginalStyle;
   let titleOriginalStyle;
 
+  let fuse;
+  let searchIndex = [];
+
+  const fetchIndex = async () => {
+    const response = await fetch(`${host.indexOf('localhost') > -1 ? 'http://' : 'https://'}${host}/index.xml`);
+    const xmlText = await response.text();
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+    const items = Array.from(xmlDoc.getElementsByTagName('item'));
+
+    searchIndex = items.map(item => ({
+      title: item.getElementsByTagName('title')[0].textContent,
+      link: item.getElementsByTagName('link')[0].textContent,
+      content: item.getElementsByTagName('description')[0]?.textContent || ''
+    }));
+
+    fuse = new Fuse(searchIndex, {
+      keys: ['title', 'content'],
+      threshold: 0.3
+    });
+  };
+
   const onMouseOver = (node) => {
     originalStyle = Object.assign({}, node.style);
     node.style.backgroundColor = hoverColor;
@@ -34,7 +57,7 @@
     child.classList.remove('d-on-nav-focus');
 
     const title = node.querySelector('.title');
-    if (title && primaryColor === ' #fff') {
+    if (title && primaryColor === '#fff') {
       titleOriginalStyle = title.style;
       title.style.color = '#fff';
     }
@@ -90,123 +113,38 @@
     `
   }
 
-  const createGoogleSearchItem = (keyword) => {
-    return `
-    <li class="color-bg-primary search-item d-flex flex-justify-start flex-items-center p-0 f5 navigation-item js-navigation-item js-jump-to-scoped-search"
-        role="option" aria-selected="false" tabindex="0">
-        <a onmouseover="onMouseOver(this)" onmouseleave="onMouseLeave(this)"
-          class="no-underline d-flex flex-auto flex-items-center jump-to-suggestions-path js-jump-to-suggestion-path js-navigation-open p-2"
-          href="https://www.google.com/search?q=${keyword}" target="_blank" data-item-type="scoped_search">
-          <div class="jump-to-octicon js-jump-to-octicon flex-shrink-0 mr-2 text-center ">
-            <svg title="Search" aria-label="Search" role="img" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-search js-jump-to-octicon-search flex-shrink-0">
-                <path fill-rule="evenodd" d="M11.5 7a4.499 4.499 0 11-8.998 0A4.499 4.499 0 0111.5 7zm-.82 4.74a6 6 0 111.06-1.06l3.04 3.04a.75.75 0 11-1.06 1.06l-3.04-3.04z"></path>
-            </svg>
-          </div>    
 
-          <div
-            class="title jump-to-suggestion-name js-jump-to-suggestion-name flex-auto overflow-hidden text-left no-wrap css-truncate css-truncate-target">
-            ${keyword}
-          </div>
-
-          <div aria-hidden="true" style="color: var(--color-fg-muted);"
-            class="color-bg-primary js-jump border rounded-2 flex-shrink-0 color-bg-subtle px-1 ml-1 f6 d-on-nav-focus js-jump-to-badge-jump">
-            Google search
-            <span class="d-inline-block ml-1 v-align-middle">↵</span>
-          </div>
-        </a>
-      </li>
-    `
-  }
-
-  const stripHtml = (html) => {
-    let tmp = document.createElement('div');
-    tmp.innerHTML = html;
-
-    // remove style tags and content
-    const styles = tmp.getElementsByTagName('style');
-    while(styles[0]) {
-      styles[0].parentNode.removeChild(styles[0]);
-    }
-
-    // remove script tags and content
-    const scripts = tmp.getElementsByTagName('script');
-    while(scripts[0]) {
-      scripts[0].parentNode.removeChild(scripts[0]);
-    }
-    
-    return tmp.textContent || tmp.innerText || "";
-  }
-
-  const inputDom = document.querySelector(".Header-search-input");
-  const resultDom = document.getElementById('jump-to-results');
-  let debounceTimer;
-  let parser;
-  let xmlDoc;
-
-  const search = (_keyword) => {
-
+  const search = (query) => {
+    const resultDom = document.getElementById('jump-to-results');
     resultDom.innerHTML = '';
 
-    const keyword = _keyword;
+    if (!query || !fuse) return;
+    localStorage.setItem('keyword', query);
 
-    if (!keyword) return;
-
-    const progressDom = document.getElementById('search-progress');
-    if (progressDom && progressDom.classList.contains('d-none')) {
-      progressDom.classList.remove('d-none');
-    }
-
-    localStorage.setItem('keyword', keyword);
-    fetch(`${host.indexOf('localhost') > -1 ? 'http://' : 'https://'}${host}/index.xml`).then(resp => resp.text()).then(async (res) => {
-      parser = new DOMParser();
-      xmlDoc = parser.parseFromString(res, 'text/xml');
-      const linkResult = xmlDoc.getElementsByTagName('link');
-      const titleResult = xmlDoc.getElementsByTagName('title');
-      const arr = [];
-
-      const matched = [];
-      await (async function searchLink() {
-        for (let i = 0; i < linkResult.length; i++) {
-          await fetch(linkResult[i].textContent).then(resp => resp.text().then(res => {
-            const pureText = stripHtml(res);
-            if (pureText.indexOf(keyword) >= 0) {
-              matched.push(i);
-            }
-          }))
-        }
-      })();
-
-      const googleSearchItem = createGoogleSearchItem(keyword);
-      const node= document.createRange().createContextualFragment(googleSearchItem);
-      resultDom.appendChild(node);
-
-      matched.map((itemIndex, index) => {
-        const r = createSearchItem(titleResult[itemIndex].textContent, linkResult[itemIndex].textContent, index + 1);
-        const node = document.createRange().createContextualFragment(r);
-        resultDom.appendChild(node);
-      });
-
-      if (progressDom && !progressDom.classList.contains('d-none')) {
-        progressDom.classList.add('d-none');
-      }
+    const results = fuse.search(query).map(res => res.item);
+    results.forEach((item, index) => {
+      resultDom.innerHTML += createSearchItem(item.title, item.link, index + 1);
     });
-  }
-
-  const debounce = (callback, time) => {
-    window.clearTimeout(debounceTimer);
-    debounceTimer = window.setTimeout(callback, time);
   };
 
-  ['focus', 'input'].forEach(event => {
-    inputDom.addEventListener(event, (e) => {
-      debounce(() => search(e.target.value), 500);
-    }, false);
-  });
+  const debounce = (callback, delay) => {
+    let timer;
+    return (...args) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => callback(...args), delay);
+    };
+  };
 
-  inputDom.addEventListener('blur', () => {
-    setTimeout(() => {
-      resultDom.innerHTML = '';
-    }, 100);
+  document.addEventListener('DOMContentLoaded', async () => {
+    await fetchIndex();
+
+    const inputDom = document.querySelector('.Header-search-input');
+    const debouncedSearch = debounce((e) => search(e.target.value), 300);
+
+    inputDom.addEventListener('input', debouncedSearch);
+    inputDom.addEventListener('blur', () => setTimeout(() => {
+      document.getElementById('jump-to-results').innerHTML = '';
+    }, 100));
   });
 
 </script>
